@@ -462,6 +462,16 @@ outbox is `~/.local/share/whatsapp-mcp/outbox`, created on bridge startup. Move
 files there before calling `send_file` or `send_audio_message`, or set
 `WHATSAPP_MEDIA_ROOTS` to a colon-separated list of absolute directories.
 
+### Robot prefix per chat
+
+A chat listed in `whatsapp-bridge/store/robot-prefix-chats.txt` (one JID per
+line, `#` starts a comment) sees every message sent through `/api/send` start
+with `🤖: `. The stored row carries the prefixed text. A text that already
+starts with `🤖` is not prefixed again. A photo, video or document with no
+caption gets the caption `🤖`; a voice message has no caption and is sent as
+is. Reactions and group-admin calls are not touched. The file is read on every
+send, so an edit needs no restart; a missing file prefixes nothing.
+
 ### Run automatically on macOS
 
 macOS users can install optional per-user `launchd` jobs that start the Go

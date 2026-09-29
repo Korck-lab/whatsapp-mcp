@@ -1368,6 +1368,10 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 		return false, err.Error()
 	}
 
+	// Robot prefix (robot_prefix.go): the text, the caption and the stored
+	// row all carry what the chat sees.
+	message = outboundText(client, robotPrefixChatsPath, settingsLookupJID, message, mediaPath)
+
 	msg := &waProto.Message{}
 
 	// Check if we have media to send
