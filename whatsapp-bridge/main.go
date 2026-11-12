@@ -2280,6 +2280,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, 
 
 	// Group management endpoints (see group_endpoints.go)
 	registerGroupEndpoints(mux, auth, client)
+	registerCheckNumbers(mux, auth, clientChecker(client), newPacer(checkPace))
 
 	// Health check endpoint
 	mux.HandleFunc("/api/health", auth(func(w http.ResponseWriter, r *http.Request) {
