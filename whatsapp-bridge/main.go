@@ -1293,12 +1293,18 @@ func resolveRecipientJID(client *whatsmeow.Client, recipient string) (types.JID,
 			if lidErr != nil {
 				fmt.Printf("Warning: LID cache lookup failed for %s: %v, falling back to server\n", recipientJID, lidErr)
 			}
-			info, infoErr := client.GetUserInfo(ctx, []types.JID{recipientJID})
+			userLID, infoErr := userInfoLID(ctx, client, recipientJID)
 			if infoErr != nil {
 				fmt.Printf("Warning: server LID lookup failed for %s: %v\n", recipientJID, infoErr)
-			} else if userInfo, ok := info[recipientJID]; ok && !userInfo.LID.IsEmpty() {
-				fmt.Printf("Resolved %s -> %s (LID via server)\n", recipientJID, userInfo.LID)
-				recipientJID = userInfo.LID
+			} else if !userLID.IsEmpty() {
+				fmt.Printf("Resolved %s -> %s (LID via server)\n", recipientJID, userLID)
+				recipientJID = userLID
+			} else if lid, ok := lidFromPresence(ctx, client, recipientJID); ok {
+				// KS-384: GetUserInfo returns no LID for a number that never
+				// chatted with us, and whatsmeow's own send then fails with
+				// "no LID found for <n> from server". The presence query
+				// (the one /api/check-numbers uses) does return the LID.
+				recipientJID = lid
 			}
 		}
 	}
@@ -2280,7 +2286,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, port int, 
 
 	// Group management endpoints (see group_endpoints.go)
 	registerGroupEndpoints(mux, auth, client)
-	registerCheckNumbers(mux, auth, clientChecker(client), newPacer(checkPace))
+	registerCheckNumbers(mux, auth, clientChecker(client), presencePacer)
 
 	// Health check endpoint
 	mux.HandleFunc("/api/health", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -3681,4 +3687,42 @@ func placeholderWaveform(duration uint32) []byte {
 	}
 
 	return waveform
+}
+
+// lidFromPresence asks WhatsApp whether pn is registered and, when it is and
+// the answer is a LID, caches the pn->lid pair so whatsmeow's send path finds
+// it too. It reads from WhatsApp and writes only that one cache row.
+func lidFromPresence(ctx context.Context, client *whatsmeow.Client, pn types.JID) (types.JID, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := presenceLookup(ctx, client, []string{pn.User})
+	if err != nil {
+		fmt.Printf("Warning: presence lookup failed for %s: %v\n", pn, err)
+		return types.JID{}, false
+	}
+	for _, r := range res {
+		if r.Query != pn.User || !r.IsIn {
+			continue
+		}
+		jid, perr := types.ParseJID(r.JID)
+		if perr != nil || jid.Server != types.HiddenUserServer {
+			return types.JID{}, false
+		}
+		if perr := client.Store.LIDs.PutLIDMapping(ctx, jid, pn); perr != nil {
+			fmt.Printf("Warning: could not cache %s -> %s: %v\n", pn, jid, perr)
+		}
+		fmt.Printf("Resolved %s -> %s (LID via presence lookup)\n", pn, jid)
+		return jid, true
+	}
+	return types.JID{}, false
+}
+
+// userInfoLID asks WhatsApp's user-info query for pn's LID. It is a variable
+// so a test can stand in for WhatsApp.
+var userInfoLID = func(ctx context.Context, client *whatsmeow.Client, pn types.JID) (types.JID, error) {
+	info, err := client.GetUserInfo(ctx, []types.JID{pn})
+	if err != nil {
+		return types.JID{}, err
+	}
+	return info[pn].LID, nil
 }

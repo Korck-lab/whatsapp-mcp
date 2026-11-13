@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 )
 
 // fakeWA answers the way IsOnWhatsApp does: one entry per number that exists
@@ -189,5 +192,62 @@ func TestCheckNumbersPaceBetweenQueries(t *testing.T) {
 		if len(q) > checkChunkSize {
 			t.Fatalf("a query carried %d numbers, chunk is %d", len(q), checkChunkSize)
 		}
+	}
+}
+
+// recordingLIDStore is a LID store that remembers what is written to it.
+type recordingLIDStore struct {
+	mockLIDStore
+	puts map[types.JID]types.JID // pn -> lid
+}
+
+func (r *recordingLIDStore) PutLIDMapping(_ context.Context, lid, pn types.JID) error {
+	if r.puts == nil {
+		r.puts = map[types.JID]types.JID{}
+	}
+	r.puts[pn] = lid
+	return nil
+}
+
+// KS-384: GetUserInfo returns no LID for a never-chatted number, so the send
+// path kept the phone JID and whatsmeow failed with "no LID found for <n>
+// from server". IsOnWhatsApp (the check-numbers route) does return the LID.
+func TestResolveRecipientUsesPresenceLookupWhenUserInfoHasNoLID(t *testing.T) {
+	old, oldInfo := presenceLookup, userInfoLID
+	defer func() { presenceLookup, userInfoLID = old, oldInfo }()
+	userInfoLID = func(context.Context, *whatsmeow.Client, types.JID) (types.JID, error) {
+		return types.JID{}, nil // what the server returns for a never-chatted number
+	}
+	presenceLookup = func(_ context.Context, _ *whatsmeow.Client, phones []string) ([]waLookup, error) {
+		return []waLookup{{Query: phones[0], JID: "99887766@lid", IsIn: true}}, nil
+	}
+	st := &recordingLIDStore{}
+	got, err := resolveRecipientJID(newTestClient(st), "5511999990001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := types.NewJID("99887766", types.HiddenUserServer)
+	if got != want {
+		t.Fatalf("expected %s, got %s", want, got)
+	}
+	pn := types.NewJID("5511999990001", types.DefaultUserServer)
+	if st.puts[pn] != want {
+		t.Fatalf("the pn->lid pair must be cached so whatsmeow finds it, got %v", st.puts)
+	}
+}
+
+func TestResolveRecipientKeepsPhoneJIDWhenNotOnWhatsApp(t *testing.T) {
+	old, oldInfo := presenceLookup, userInfoLID
+	defer func() { presenceLookup, userInfoLID = old, oldInfo }()
+	userInfoLID = func(context.Context, *whatsmeow.Client, types.JID) (types.JID, error) {
+		return types.JID{}, nil // what the server returns for a never-chatted number
+	}
+	presenceLookup = func(_ context.Context, _ *whatsmeow.Client, phones []string) ([]waLookup, error) {
+		return []waLookup{{Query: phones[0], IsIn: false}}, nil
+	}
+	st := &recordingLIDStore{}
+	got, _ := resolveRecipientJID(newTestClient(st), "5511999990002")
+	if got.Server != types.DefaultUserServer || len(st.puts) != 0 {
+		t.Fatalf("a number not on WhatsApp must stay a phone JID and cache nothing, got %s %v", got, st.puts)
 	}
 }

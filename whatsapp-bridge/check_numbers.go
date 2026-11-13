@@ -56,6 +56,19 @@ func clientChecker(client *whatsmeow.Client) waChecker {
 	}
 }
 
+// presenceLookup is the presence query the send path falls back on. It is a
+// variable so a test can stand in for WhatsApp. It goes through the same
+// process-wide pacer as /api/check-numbers.
+var presenceLookup = func(ctx context.Context, client *whatsmeow.Client, phones []string) ([]waLookup, error) {
+	if err := presencePacer.wait(ctx); err != nil {
+		return nil, err
+	}
+	return clientChecker(client)(ctx, phones)
+}
+
+// presencePacer is the one gate for every presence query, check or send.
+var presencePacer = newPacer(checkPace)
+
 // pacer spaces WhatsApp queries: one process-wide gate.
 type pacer struct {
 	mu   sync.Mutex
